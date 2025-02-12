@@ -304,15 +304,20 @@ class Llama(LlamaPreTrainedModel):
                 '''
                 scale = logits / temperature
                 sftx = F.softmax(scale, dim=-1)
-                sort_tokens, _ = torch.sort(sftx, descending=True, dim=-1)
+                sort_tokens, sort_idx = torch.sort(sftx, descending=True, dim=-1)
                 cumulative = torch.cumsum(sort_tokens, dim=-1)
 
-                cutoff_indices = torch.searchsorted(cumulative, top_p, right=True)
-                filter = torch.arange(sftx.size(-1), device=sftx.device).expand(sftx.size(0), -1) < cutoff_indices.unsqueeze(1)
+                cutoff_mask = cumulative <= top_p
+                cutoff_mask = torch.cat([cutoff_mask, torch.zeros_like(cutoff_mask[:, :1])], dim=1)
 
-                probs = torch.where(filter, sftx, torch.zeros_like(sftx))
-                probs = probs / probs.sum(dim=-1, keepdim=True)
-                idx_next = torch.multinomial(probs, num_samples=1)
+                n_tokens = torch.sum(cutoff_mask, dim=1)
+                masked_probs = torch.zeros_like(sftx)
+                for b in range(sftx.size(0)):
+                    top_indices = sort_idx[b, :n_tokens[b]]
+                    masked_probs[b, top_indices] = sftx[b, top_indices]
+                
+                masked_probs = masked_probs / masked_probs.sum(dim=-1, keepdim=True)
+                idx_next = torch.multinomial(sftx, num_samples=1)
 
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)
